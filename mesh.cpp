@@ -50,7 +50,7 @@ void Model::loadModel(const std::string &path)
             }
         }
     }
-    textures = new cl::Image2DArray(context, CL_MEM_READ_ONLY, cl::ImageFormat(CL_RGBA, CL_UNORM_INT8), 
+    textures = new cl::Image2DArray(context, CL_MEM_READ_ONLY, cl::ImageFormat(CL_sRGBA, CL_UNORM_INT8), 
                                     nTextures, width, height, 0, 0);
     int vOff = 0, tOff = 0;
     for (int i = 0; i < meshes.size(); i++) {

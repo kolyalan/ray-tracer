@@ -1,4 +1,8 @@
 
+
+#define N_IN 1.6f
+#define N_OUT 1.0f
+
 typedef struct {
     float3 center;
     float radius;
@@ -111,7 +115,7 @@ bool intersectRayTriangle(float3 rayOrigin,
 bool rayTriangleIntersect( 
     const float3 orig, const float3 dir, bool frontOnly,
     const float3 v0, const float3 v1, const float3 v2, 
-    float *t, float *u, float *v) { 
+    float *t, float *u, float *v, bool *frontFacing) { 
     float3 v0v1 = v1 - v0; 
     float3 v0v2 = v2 - v0; 
     float3 pvec = cross(dir, v0v2); 
@@ -119,7 +123,10 @@ bool rayTriangleIntersect(
 
     // if the determinant is negative the triangle is backfacing
     // if the determinant is close to 0, the ray misses the triangle
-    if (frontOnly && det < kEpsilon) return false; 
+    *frontFacing = !(det < kEpsilon);
+    if (!*frontFacing && frontOnly) {
+        return false; 
+    }
 
     // ray and triangle are parallel if det is close to 0
     if (!frontOnly && fabs(det) < kEpsilon) return false; 
@@ -144,6 +151,7 @@ bool closestIntersection (float3 orig, float3 dir, bool frontOnly, float t_min, 
     Vertex vertex0, vertex1, vertex2;
     int mesh_min = -1;
     float u, v;
+    bool frontFacing = 0;
     for (int j = 0; j < scene.meshesNum; j++) {
         Mesh_idx mesh = scene.meshes[j];
         int tOff = mesh.indices;
@@ -154,11 +162,12 @@ bool closestIntersection (float3 orig, float3 dir, bool frontOnly, float t_min, 
             Vertex tmpVertex2 = scene.vertices[vOff+scene.triangles[tOff+i].vertex2];
             
             float t, tmpU, tmpV;
+            bool tmpFrontFacing = 0;
             if (rayTriangleIntersect(orig, dir, frontOnly,
                                     tmpVertex0.Position,
                                     tmpVertex1.Position,
                                     tmpVertex2.Position,
-                                    &t, &tmpU, &tmpV)) {
+                                    &t, &tmpU, &tmpV, &tmpFrontFacing)) {
                 if (t > t_min && t < t_max && t_closest > t) {
                     t_closest = t;
                     vertex0 = tmpVertex0;
@@ -167,6 +176,7 @@ bool closestIntersection (float3 orig, float3 dir, bool frontOnly, float t_min, 
                     u = tmpU;
                     v = tmpV;
                     mesh_min = j;
+                    frontFacing = tmpFrontFacing;
                 }
             }
         }
@@ -219,19 +229,20 @@ bool findIntersection(float3 orig, float3 dir, bool frontOnly, float t_min, floa
 float4 computeLightning(float3 orig, float3 dir, Scene scene, float4 diffuseColor, float3 coords, float3 normal, float specular, image2d_array_t texture) {
     float3 viewVector = dir;
     float4 color = 0;
+    float lightIntensity = 0;
     float3 lightVector=0;
     float distance = 1;
     float t_max;
     coords += normal * 0.00001f;
     for (int i = 0; i < scene.lightsNum; i++) {
         if(scene.lights[i].type == AMBIENT) {
-                color += diffuseColor * scene.lights[i].intensity;
+                lightIntensity += scene.lights[i].intensity;
         } else {    
             if (scene.lights[i].type == POINT) {
                 lightVector = scene.lights[i].dir - coords;
                 distance = length(scene.lights[i].dir);
                 distance *= distance;
-                distance /= 5;
+                //distance /= 5;
                 t_max = 1;
             } else {// DIRECTIONAL
                 lightVector = scene.lights[i].dir;
@@ -243,33 +254,112 @@ float4 computeLightning(float3 orig, float3 dir, Scene scene, float4 diffuseColo
             int objectId;
             float4 texCoords;
             if (closestIntersection(coords, lightVector, false, 0, t_max, scene, &objectId, &t, &texCoords, NULL)) {
-                float4 diffuseColor = read_imagef(texture, mySampler, texCoords);
-                shadow = 1 - diffuseColor.a;
+                //float4 diffuseColor = read_imagef(texture, mySampler, texCoords);
+                //shadow = 1 - diffuseColor.a;
+                shadow = 0;
             }
 
             float nDotL = dot(normal, lightVector);
             if (nDotL > 0) {
-                color += diffuseColor * (scene.lights[i].intensity * shadow* nDotL / (length(normal) * length(lightVector)) / distance);
+                lightIntensity += scene.lights[i].intensity * shadow* nDotL / (length(normal) * length(lightVector)) / distance;
             }
             
             if (specular > kEpsilon) {
                 float3 R = 2*normal*dot(normal, -lightVector) + lightVector;
                 float RDotV = dot(R, viewVector);
                 if (RDotV > 0) {
-                    color += diffuseColor * (scene.lights[i].intensity * shadow * 5 * specular * pow(RDotV/(length(R)*length(viewVector)), 350*specular) / distance) ;
+                    lightIntensity += scene.lights[i].intensity * shadow * 5 * specular * pow(RDotV/(length(R)*length(viewVector)), 200*specular) / distance;
                 }
             }
         }
     }
+    color = diffuseColor * lightIntensity;
     color.a = 1;
     return color;
 }
 
+float3 refract (float3 I, float3 N, float eta) {
+    //For a given incident vector I, surface normal N and ratio of 
+    //indices of refraction, eta, refract returns the refraction vector, R. 
+    //R is calculated as:
+    float3 R;
+    float k = 1.0f - eta * eta * (1.0f - dot(N, I) * dot(N, I));
+    if (k < 0.0f)
+        R = 0.0f;
+    else
+        R = eta * I - (eta * dot(N, I) + sqrt(k)) * N;
+
+    //The input parameters I and N should be normalized in order to 
+    //achieve the desired result.
+    return R;
+}
+
+float3 reflect(float3 I, float3 N) {
+    return I - 2.0f * dot(N, I) * N;
+}
+
+float3 RandomHemispherePoint(float2 rand)
+{
+    float cosTheta = sqrt(1.0f - rand.x);
+    float sinTheta = sqrt(rand.x);
+    float phi = 2.0f * M_PI_F * rand.y;
+    float3 R = {cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta};
+    return R;
+}
+
+float3 NormalOrientedHemispherePoint(float2 rand, float3 n)
+{
+    float3 v = RandomHemispherePoint(rand);
+    return dot(v, n) < 0.0f ? -v : v;
+}
+
+float FresnelSchlick(float nIn, float nOut, float angle)
+{
+    float R0 = ((nOut - nIn) * (nOut - nIn)) / ((nOut + nIn) * (nOut + nIn));
+    float fresnel = R0 + (1.0f - R0) * pow((1.0f - cos(angle)), 5.0f);
+    return fresnel;
+}
+
+float3 IdealRefract(float3 direction, float3 normal, float nIn, float nOut)
+{
+    // проверим, находимся ли мы внутри объекта
+    // если да - учтем это при расчете сред и направления луча
+    bool fromOutside = dot(normal, direction) < 0.0f;
+    float ratio = fromOutside ? nOut / nIn : nIn / nOut;
+
+    float3 refraction, reflection;
+    refraction = fromOutside ? refract(direction, normal, ratio) : -refract(-direction, normal, ratio);
+    reflection = reflect(direction, normal);
+
+    // в случае полного внутренного отражения refract вернет нам 0.0
+    return refraction == 0.0f ? reflection : refraction;
+}
+
+bool IsRefracted(float rand, float3 direction, float3 normal, float opacity, float nIn, float nOut)
+{
+    bool fromOutside = dot(normal, direction) < 0.0f;
+    float ratio = fromOutside ? nOut / nIn : nIn / nOut;
+    float angle = acos(fabs(dot(direction, normal)));
+    if (ratio > 1) {
+        float critAngle = asin(1/ratio);
+        if (angle > critAngle) {
+            return false;
+        }
+        angle = angle / critAngle * M_PI_2_F;
+    }
+    float fresnel = FresnelSchlick(nIn, nOut, angle);
+    return opacity > rand && fresnel < rand;
+}
+
 kernel void intersectRay(global Ray *rayList, read_write image2d_t screen, global Mesh_idx * meshes, int meshesNum,
                          global Vertex *vertices, global Triangle *triangles, read_only image2d_array_t texture,
-                         global Light *lights, int lightsNum) {
+                         global Light *lights, int lightsNum, unsigned useed, int iteration) {
     int globalId = get_global_id(0);
     Ray myRay = rayList[globalId];
+
+    if (myRay.type == ENDED) {
+        return;
+    }
 
     float4 color = {0, 0, 0, 1};
     float4 diffuseColor;
@@ -278,16 +368,63 @@ kernel void intersectRay(global Ray *rayList, read_write image2d_t screen, globa
     float specular;
     Scene scene = {meshes, meshesNum, vertices, triangles, lights, lightsNum};
 
-    if (!findIntersection(myRay.startPoint, myRay.direction, true, 0, INFINITY, scene, texture,
-                          &diffuseColor, &coords, &normal, &specular)) {
-        color.xyz = normalize(myRay.direction)/2 + 0.5f;
-    } else {
-        color = computeLightning(myRay.startPoint, myRay.direction, scene, diffuseColor, coords, normal, specular, texture);
-    }
-
     float weight = myRay.weight;
 
+    if (!findIntersection(myRay.startPoint, myRay.direction, false, 0, INFINITY, scene, texture,
+                          &diffuseColor, &coords, &normal, &specular)) {
+        color.xyz = normalize(myRay.direction)/2 + 0.5f;
+        myRay.type = ENDED;
+        color *= myRay.weight;
+        rayList[globalId] = myRay;
+    } else {
+        color = computeLightning(myRay.startPoint, myRay.direction, scene, diffuseColor, coords, normal, specular, texture);
+
+        if (specular > 0.0f) {
+            float3 rayDirection = myRay.direction;
+            float3 newRayOrigin = coords;
+            float3 hemisphereDistributedDirection = NormalOrientedHemispherePoint(random2D(globalId, useed), normal);
+
+            float3 randomVec = normalize(2.0f * random3D(globalId, useed) - 1.0f);
+            float3 tangent = cross(randomVec, normal);
+            float3 bitangent = cross(normal, tangent);
+            float3 transform[3] = {tangent, bitangent, normal};
+            float3 transform2[3] = {{transform[0][0], transform[1][0], transform[2][0]},
+                                    {transform[0][1], transform[1][1], transform[2][1]},
+                                    {transform[0][2], transform[1][2], transform[2][2]}};
+            float3 newRayDirection = {dot(transform2[0], hemisphereDistributedDirection),
+                                      dot(transform2[1], hemisphereDistributedDirection),
+                                      dot(transform2[2], hemisphereDistributedDirection)};
+            newRayDirection = normalize(newRayDirection);
+
+            float roughness = 0.999;
+            bool refracted = IsRefracted(random1D(globalId, useed), normalize(rayDirection), normalize(normal), (1.0f - diffuseColor.a), N_IN, N_OUT);
+            if (refracted)
+            {
+                float3 idealRefraction = IdealRefract(normalize(rayDirection), normal, N_IN, N_OUT);
+                newRayDirection = normalize(mix(-newRayDirection, idealRefraction, roughness));
+                newRayOrigin += normal * (dot(newRayDirection, normal) < 0.0f ? -0.00001f : 0.00001f);
+            }
+            else
+            {
+                float3 idealReflection = reflect(normalize(rayDirection), normal);
+                newRayDirection = normalize(mix(newRayDirection, idealReflection, roughness));
+                newRayOrigin += normal * 0.000001f;
+            }
+
+            myRay.direction = newRayDirection;
+            myRay.startPoint = newRayOrigin;
+
+            color *= myRay.weight*(1-specular);
+            myRay.weight *= (specular);
+            rayList[globalId] = myRay;
+        } else {
+            myRay.type = ENDED;
+            color *= myRay.weight;
+            rayList[globalId] = myRay;
+        }
+    }
+
     float4 oldColor = read_imagef(screen, myRay.screenCoords);
-    color = color*weight + oldColor;
+    color += oldColor;
     write_imagef(screen, myRay.screenCoords, color);
 }

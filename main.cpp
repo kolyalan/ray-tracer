@@ -10,7 +10,7 @@
 #include "Image.h"
 #include "mesh.h"
 
-const int ScreenWidth = 1024, ScreenHeight = 1024;
+const int ScreenWidth = 512, ScreenHeight = 512;
 
 static cl::Platform defaultPlatform;
 static cl::Device defaultDevice;
@@ -130,12 +130,11 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
         return 1;
     }
     int nPixels = ScreenWidth*ScreenHeight;
-    int nRaysPerPixel = 7;
+    int nRaysPerPixel = 32;
     // create buffers on the device
     //cl::Buffer screenBuffer(context, CL_MEM_READ_WRITE, screen.getSize());
     cl::Image2D floatScreenBuffer(context, CL_MEM_READ_WRITE, cl::ImageFormat(CL_RGBA, CL_FLOAT), ScreenWidth, ScreenHeight);
     cl::Image2D int8ScreenBuffer(context, CL_MEM_READ_WRITE, cl::ImageFormat(CL_RGBA, CL_UNORM_INT8), ScreenWidth, ScreenHeight);
-    cl::Buffer rayPool(context, CL_MEM_READ_WRITE, nPixels*nRaysPerPixel*sizeof(Ray));
     
     cl::Buffer vertexesBuffer(context, model.vertices.begin(), model.vertices.end(), true, false, &err_no);
     if (err_no != 0) {
@@ -163,7 +162,8 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
 
     cl::Image2DArray *texture = model.textures;
 
-    //cl::Buffer newRayPool(context, CL_MEM_READ_WRITE, 2*ScreenHeight*ScreenWidth);
+    cl::Buffer rayPool(context, CL_MEM_READ_WRITE, nPixels*nRaysPerPixel*sizeof(Ray));
+    //cl::Buffer newRayPool(context, CL_MEM_READ_WRITE, 2*nPixels*nRaysPerPixel*sizeof(Ray));
 
     //write arrays A and B to the device
     //queue.enqueueWriteImage(screenBuffer, CL_TRUE, screen.getData(), );
@@ -184,21 +184,12 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
 
     queue.enqueueNDRangeKernel(emit_kernel, cl::NullRange, cl::NDRange(ScreenWidth, ScreenHeight), cl::NullRange);
 
-/*
-    Ray * rayList = new Ray[nPixels*nRaysPerPixel];
-
-    queue.enqueueReadBuffer(rayPool, 1, 0, sizeof(*rayList)*ScreenHeight*ScreenWidth, rayList);
-
-    for (int i = 0; i < ScreenHeight*ScreenWidth; i++) {
-        std::cout << "x" << rayList[i].screenCoords.x << "y" << rayList[i].screenCoords.y <<  std::endl;
-    }*/
 
     cl::Kernel intersectKernel(program, "intersectRay", &err_no);
     if (err_no != CL_SUCCESS) {
         std::cout << " Error creating kernel emitRays: " << err_no << std::endl;
         return 1;
     }
-
     intersectKernel.setArg(0, rayPool);
     intersectKernel.setArg(1, floatScreenBuffer);
     intersectKernel.setArg(2, meshesBuffer);
@@ -208,14 +199,30 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
     intersectKernel.setArg(6, *texture);
     intersectKernel.setArg(7, lightsBuffer);
     intersectKernel.setArg(8, lights.size());
-    for (int i = 0; i < nRaysPerPixel; i++) {
-        err_no = queue.enqueueNDRangeKernel(intersectKernel, cl::NDRange(i*nPixels), cl::NDRange(nPixels), cl::NullRange);
-        if (err_no != CL_SUCCESS) {
-            std::cout << "Unable to call intersectRays Err: " << err_no << std::endl;
-            return 1;
+
+    for (int iteration = 4; iteration > 0; iteration--) {
+        intersectKernel.setArg(9, (unsigned)rand());
+        intersectKernel.setArg(10, iteration);
+
+        for (int i = 0; i < nRaysPerPixel; i++) {
+            err_no = queue.enqueueNDRangeKernel(intersectKernel, cl::NDRange(i*nPixels), cl::NDRange(nPixels), cl::NullRange);
+            if (err_no != CL_SUCCESS) {
+                std::cout << "Unable to call intersectRays Err: " << err_no << std::endl;
+                return 1;
+            }
         }
     }
 
+  /*  
+    Ray * rayList = new Ray[nPixels*nRaysPerPixel];
+
+    queue.enqueueReadBuffer(rayPool, 1, 0, sizeof(*rayList)*ScreenHeight*ScreenWidth, rayList);
+
+    for (int i = 0; i < ScreenHeight*ScreenWidth; i++) {
+        if (rayList[i].type != ENDED)
+            std::cout << rayList[i].direction.x << " " << rayList[i].direction.y << " " << rayList[i].direction.z << " " << "x" << rayList[i].screenCoords.x << "y" << rayList[i].screenCoords.y << " " << rayList[i].type << std::endl;
+    }
+*/
     cl::Kernel imageToIntKerel(program, "imageToInt", &err_no);
     if (err_no != CL_SUCCESS) {
         std::cout << " Error creating kernel emitRays: " << err_no << std::endl;
@@ -246,10 +253,10 @@ int main() {
     cl_float3 viewPoint = {0, -2, -10};
     cl_float3 viewVector = {0, 0.2/10, 1.0/10};
     std::vector<Light> lights;
-    lights.push_back({AMBIENT, 0.25f, {0,0,0}});
-    lights.push_back({DIRECTIONAL, 0.2f, {-1,-2,-1}});
-    lights.push_back({DIRECTIONAL, 0.2f, {0,-2,1}});
-    lights.push_back({POINT, 0.6, {2, -1, -1}});
+    lights.push_back({AMBIENT, 0.1f, {0,0,0}});
+    lights.push_back({POINT, 0.2f, {-1,-2,-1}});
+   //lights.push_back({DIRECTIONAL, 0.15f, {0,-2,1}});
+    lights.push_back({POINT, 0.7, {2, -1, -1}});
 
     if (callCLTraceRay(picture, lights, viewPoint, viewVector, model)) {
         std::cout << "Some error" << std::endl;
