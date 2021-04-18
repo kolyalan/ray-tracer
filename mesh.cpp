@@ -51,7 +51,7 @@ void Model::loadModel(const std::string &path)
         }
     }
     textures = new cl::Image2DArray(context, CL_MEM_READ_ONLY, cl::ImageFormat(CL_sRGBA, CL_UNORM_INT8), 
-                                    nTextures, width, height, 0, 0);
+                                    nTextures+1, width, height, 0, 0);
     int vOff = 0, tOff = 0;
     for (int i = 0; i < meshes.size(); i++) {
         queue.enqueueWriteImage(*textures, CL_BLOCKING, {0, 0, (unsigned)mesh_index[i].textureIdx}, 
@@ -64,6 +64,9 @@ void Model::loadModel(const std::string &path)
         tOff = indices.size() / 3;
         mesh_index[i].triangleNum = meshes[i].indices.size()/3;
     }
+    MyImage noise = TextureFromFile("noise.png", directory);
+    queue.enqueueWriteImage(*textures, CL_BLOCKING, {0, 0, (unsigned)nTextures}, 
+                            {(unsigned)width, (unsigned)height, 1}, 0, 0, noise.getData());
 }  
 
 void Model::processNode(aiNode *node, const aiScene *scene, std::vector<Mesh> &meshes)

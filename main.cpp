@@ -26,7 +26,7 @@ typedef struct {
 } Sphere;
 
 typedef enum {
-    INITIAL, INTERSECTED, ENDED
+     ENDED, INITIAL
 } ray_type;
 
 typedef struct {
@@ -122,6 +122,76 @@ cl::Program buildCLProgram(cl_int *err) {
     return program;
 }
 
+size_t getGlobalWorkSize(size_t DataElemCount, size_t LocalWorkSize)
+{
+	size_t r = DataElemCount % LocalWorkSize;
+	if(r == 0)
+		return DataElemCount;
+	else
+		return DataElemCount + LocalWorkSize - r;
+}
+
+int callCLSort(cl::Program &program, size_t N_padded, size_t LocalWorkSize,
+                cl::Buffer &m_dPingArray, cl::Buffer &m_dPongArray, int shift) {
+    cl_int clError, err_no = 0;
+	size_t globalWorkSize;
+	size_t localWorkSize;
+
+	localWorkSize = LocalWorkSize;
+	globalWorkSize = getGlobalWorkSize(N_padded / 2, localWorkSize);
+	unsigned int limit = (unsigned int)2 * LocalWorkSize; //limit is double the localWorkSize
+
+	// start with Sort_BitonicMergesortLocalBegin to sort local until we reach the limit
+    static cl::Kernel m_BitonicStartKernel(program, "Sort_BitonicMergesortStart", &err_no);
+    if (err_no != CL_SUCCESS) {
+        std::cout << " Error creating kernel Sort_BitonicMergesortStart: " << err_no << std::endl;
+        return 1;
+    }
+    static cl::Kernel m_BitonicGlobalKernel(program, "Sort_BitonicMergesortGlobal", &err_no);
+    if (err_no != CL_SUCCESS) {
+        std::cout << " Error creating kernel Sort_BitonicMergesortGlobal: " << err_no << std::endl;
+        return 1;
+    }
+    static cl::Kernel m_BitonicLocalKernel(program, "Sort_BitonicMergesortLocal", &err_no);
+    if (err_no != CL_SUCCESS) {
+        std::cout << " Error creating kernel Sort_BitonicMergesortLocal: " << err_no << std::endl;
+        return 1;
+    }
+	m_BitonicStartKernel.setArg(0, m_dPingArray);
+	m_BitonicStartKernel.setArg(1, m_dPongArray);
+	m_BitonicStartKernel.setArg(2, shift);
+    
+    queue.enqueueNDRangeKernel(m_BitonicStartKernel, cl::NullRange, cl::NDRange(globalWorkSize), cl::NDRange(localWorkSize));
+
+	// proceed with global and local kernels
+	for (unsigned int blocksize = limit; blocksize <= N_padded; blocksize <<= 1) {
+		for (unsigned int stride = blocksize / 2; stride > 0; stride >>= 1) {
+			if (stride >= limit) {
+				//Sort_BitonicMergesortGlobal
+				m_BitonicGlobalKernel.setArg(0, m_dPongArray);
+				m_BitonicGlobalKernel.setArg(1, N_padded);
+				m_BitonicGlobalKernel.setArg(2, blocksize);
+				m_BitonicGlobalKernel.setArg(3, stride);
+				m_BitonicGlobalKernel.setArg(4, shift);
+                
+                queue.enqueueNDRangeKernel(m_BitonicGlobalKernel, cl::NullRange, cl::NDRange(globalWorkSize), cl::NDRange(localWorkSize));
+			} else {
+				//Sort_BitonicMergesortLocal
+				m_BitonicLocalKernel.setArg(0,m_dPongArray);
+				m_BitonicLocalKernel.setArg(1,N_padded);
+				m_BitonicLocalKernel.setArg(2,blocksize);
+				m_BitonicLocalKernel.setArg(3,stride);
+				m_BitonicLocalKernel.setArg(4,shift);
+                
+                
+                queue.enqueueNDRangeKernel(m_BitonicLocalKernel, cl::NullRange, cl::NDRange(globalWorkSize), cl::NDRange(localWorkSize));
+			}
+		}
+	}
+	//std::swap(m_dPingArray, m_dPongArray);
+    return 0;
+}
+
 int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPoint, cl_float3 viewVector, Model &model) {
     
     cl_int err_no;
@@ -130,7 +200,12 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
         return 1;
     }
     int nPixels = ScreenWidth*ScreenHeight;
-    int nRaysPerPixel = 32;
+    int nRaysPerPixel = 128;
+
+	unsigned int log2val = (unsigned int)ceil(log((float)nPixels*nRaysPerPixel) / log(2.f));
+	size_t N_padded =  (size_t)pow(2, log2val);
+    //std::cout << nPixels*nRaysPerPixel << " -> " << N_padded << std::endl;
+
     // create buffers on the device
     //cl::Buffer screenBuffer(context, CL_MEM_READ_WRITE, screen.getSize());
     cl::Image2D floatScreenBuffer(context, CL_MEM_READ_WRITE, cl::ImageFormat(CL_RGBA, CL_FLOAT), ScreenWidth, ScreenHeight);
@@ -162,8 +237,8 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
 
     cl::Image2DArray *texture = model.textures;
 
-    cl::Buffer rayPool(context, CL_MEM_READ_WRITE, nPixels*nRaysPerPixel*sizeof(Ray));
-    //cl::Buffer newRayPool(context, CL_MEM_READ_WRITE, 2*nPixels*nRaysPerPixel*sizeof(Ray));
+    cl::Buffer rayPool(context, CL_MEM_READ_WRITE, N_padded*sizeof(Ray));
+    cl::Buffer tmpRayPool(context, CL_MEM_READ_WRITE, N_padded*sizeof(Ray));
 
     //write arrays A and B to the device
     //queue.enqueueWriteImage(screenBuffer, CL_TRUE, screen.getData(), );
@@ -190,7 +265,7 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
         std::cout << " Error creating kernel emitRays: " << err_no << std::endl;
         return 1;
     }
-    intersectKernel.setArg(0, rayPool);
+
     intersectKernel.setArg(1, floatScreenBuffer);
     intersectKernel.setArg(2, meshesBuffer);
     intersectKernel.setArg(3, model.mesh_index.size());
@@ -200,10 +275,10 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
     intersectKernel.setArg(7, lightsBuffer);
     intersectKernel.setArg(8, lights.size());
 
-    for (int iteration = 4; iteration > 0; iteration--) {
+    for (int iteration = 5; iteration > 0; iteration--) {
+        intersectKernel.setArg(0, rayPool);
         intersectKernel.setArg(9, (unsigned)rand());
         intersectKernel.setArg(10, iteration);
-
         for (int i = 0; i < nRaysPerPixel; i++) {
             err_no = queue.enqueueNDRangeKernel(intersectKernel, cl::NDRange(i*nPixels), cl::NDRange(nPixels), cl::NullRange);
             if (err_no != CL_SUCCESS) {
@@ -211,18 +286,29 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
                 return 1;
             }
         }
+        /*
+        for (int i = 0; i < nRaysPerPixel; i++) {
+            callCLSort(program, nPixels, 256, rayPool, tmpRayPool, i*nPixels);
+        }
+        std::swap(rayPool, tmpRayPool);*/
+
+        /*Ray * rayList = new Ray[nPixels*nRaysPerPixel];
+
+        queue.enqueueReadBuffer(rayPool, 1, 0, sizeof(*rayList)*nPixels*nRaysPerPixel, rayList);
+        int ended = 0, initital = 0;
+        for (int i = 0; i < nPixels*nRaysPerPixel; i++) {
+                std::cout << rayList[i].type; // "x" << rayList[i].screenCoords.x << " y" << rayList[i].screenCoords.y << " " << rayList[i].type << std::endl;
+                if (rayList[i].type == 0) {
+                    ended++;
+                }
+                if (rayList[i].type == 1) {
+                    initital++;
+                }
+        }
+        std::cout << std::endl << "iteration: " << iteration << "; intitial rays: " << initital << "; ended rays: " << ended << std::endl; 
+        delete rayList;*/
     }
 
-  /*  
-    Ray * rayList = new Ray[nPixels*nRaysPerPixel];
-
-    queue.enqueueReadBuffer(rayPool, 1, 0, sizeof(*rayList)*ScreenHeight*ScreenWidth, rayList);
-
-    for (int i = 0; i < ScreenHeight*ScreenWidth; i++) {
-        if (rayList[i].type != ENDED)
-            std::cout << rayList[i].direction.x << " " << rayList[i].direction.y << " " << rayList[i].direction.z << " " << "x" << rayList[i].screenCoords.x << "y" << rayList[i].screenCoords.y << " " << rayList[i].type << std::endl;
-    }
-*/
     cl::Kernel imageToIntKerel(program, "imageToInt", &err_no);
     if (err_no != CL_SUCCESS) {
         std::cout << " Error creating kernel emitRays: " << err_no << std::endl;
@@ -250,11 +336,11 @@ int main() {
 
     Model model("../model/crystal_ball.obj");
 
-    cl_float3 viewPoint = {0, -2, -10};
-    cl_float3 viewVector = {0, 0.2/10, 1.0/10};
+    cl_float3 viewPoint = {0, -1.5, -10};
+    cl_float3 viewVector = {0, 0.15/10, 1.0/10};
     std::vector<Light> lights;
-    lights.push_back({AMBIENT, 0.1f, {0,0,0}});
-    lights.push_back({POINT, 0.2f, {-1,-2,-1}});
+    lights.push_back({AMBIENT, 0.3f, {0,0,0}});
+    lights.push_back({POINT, 0.7f, {-1,-2,-1}});
    //lights.push_back({DIRECTIONAL, 0.15f, {0,-2,1}});
     lights.push_back({POINT, 0.7, {2, -1, -1}});
 
@@ -262,7 +348,7 @@ int main() {
         std::cout << "Some error" << std::endl;
     } else {
         std::cout << "Rendered successfully" << std::endl;
-        picture.save("../327_lanbin_v0v0.png");
+        picture.save("../327_lanbin_v0v0_tmp.png");
     }
 
     return 0;

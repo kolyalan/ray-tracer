@@ -3,7 +3,7 @@
 #include "../kernels/Random123/threefry.h"
 
 typedef enum {
-    INITIAL, INTERSECTED, ENDED
+    ENDED, MARCH, INITIAL 
 } ray_type;
 
 typedef struct {

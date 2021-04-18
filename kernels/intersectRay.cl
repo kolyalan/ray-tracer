@@ -268,7 +268,7 @@ float4 computeLightning(float3 orig, float3 dir, Scene scene, float4 diffuseColo
                 float3 R = 2*normal*dot(normal, -lightVector) + lightVector;
                 float RDotV = dot(R, viewVector);
                 if (RDotV > 0) {
-                    lightIntensity += scene.lights[i].intensity * shadow * 5 * specular * pow(RDotV/(length(R)*length(viewVector)), 200*specular) / distance;
+                    lightIntensity += scene.lights[i].intensity * shadow * 50 * specular * pow(RDotV/(length(R)*length(viewVector)), 100*specular) / distance;
                 }
             }
         }
@@ -298,8 +298,7 @@ float3 reflect(float3 I, float3 N) {
     return I - 2.0f * dot(N, I) * N;
 }
 
-float3 RandomHemispherePoint(float2 rand)
-{
+float3 RandomHemispherePoint(float2 rand) {
     float cosTheta = sqrt(1.0f - rand.x);
     float sinTheta = sqrt(rand.x);
     float phi = 2.0f * M_PI_F * rand.y;
@@ -307,21 +306,18 @@ float3 RandomHemispherePoint(float2 rand)
     return R;
 }
 
-float3 NormalOrientedHemispherePoint(float2 rand, float3 n)
-{
+float3 NormalOrientedHemispherePoint(float2 rand, float3 n) {
     float3 v = RandomHemispherePoint(rand);
     return dot(v, n) < 0.0f ? -v : v;
 }
 
-float FresnelSchlick(float nIn, float nOut, float angle)
-{
+float FresnelSchlick(float nIn, float nOut, float angle) {
     float R0 = ((nOut - nIn) * (nOut - nIn)) / ((nOut + nIn) * (nOut + nIn));
     float fresnel = R0 + (1.0f - R0) * pow((1.0f - cos(angle)), 5.0f);
     return fresnel;
 }
 
-float3 IdealRefract(float3 direction, float3 normal, float nIn, float nOut)
-{
+float3 IdealRefract(float3 direction, float3 normal, float nIn, float nOut) {
     // проверим, находимся ли мы внутри объекта
     // если да - учтем это при расчете сред и направления луча
     bool fromOutside = dot(normal, direction) < 0.0f;
@@ -335,8 +331,7 @@ float3 IdealRefract(float3 direction, float3 normal, float nIn, float nOut)
     return refraction == 0.0f ? reflection : refraction;
 }
 
-bool IsRefracted(float rand, float3 direction, float3 normal, float opacity, float nIn, float nOut)
-{
+bool IsRefracted(float rand, float3 direction, float3 normal, float opacity, float nIn, float nOut) {
     bool fromOutside = dot(normal, direction) < 0.0f;
     float ratio = fromOutside ? nOut / nIn : nIn / nOut;
     float angle = acos(fabs(dot(direction, normal)));
@@ -349,6 +344,88 @@ bool IsRefracted(float rand, float3 direction, float3 normal, float opacity, flo
     }
     float fresnel = FresnelSchlick(nIn, nOut, angle);
     return opacity > rand && fresnel < rand;
+}
+
+#define ITERATIONS 10
+#define SPEED 10.0f
+#define DISPLACEMENT 0.06f
+#define TIGHTNESS 15.0f
+#define YOFFSET 0.1f
+#define YSCALE 0.25f
+#define FLAMETONE {50.0f, 5.0f, 1.0f}
+
+float shape(float2 pos) // a blob shape to distort
+{
+	return clamp( sin(pos.x*3.14169265f) - pos.y+YOFFSET, 0.0f, 1.0f );
+}
+
+float noise(float3 x, image2d_array_t texture) // iq noise function
+{
+	float3 p;
+    float3 f = fract(x, &p);
+	f = f*f*(3.0f-2.0f*f);
+    float2 idk = {37.0f,17.0f};
+	float2 uv = (p.xy+idk*p.z) + f.xy;
+    float4 texCoords = {(uv+ 0.5f)/256.0f, 4, 0};
+	float2 rg = read_imagef(texture, mySampler, texCoords).yx;
+	return mix( rg.x, rg.y, f.z ) * 2.0f - 1.0f;
+}
+
+float plaIntersect(float3 ro, float3 rd, float4 p )
+{
+    return -(dot(ro,p.xyz)+p.w)/dot(rd,p.xyz);
+}
+
+float4 marchRay(float3 startPoint, float3 endPoint, image2d_array_t texture) {
+    float3 dir = normalize(endPoint - startPoint);
+    float4 p = {0, 0, 1, 0};
+    float2 uv = (startPoint + dir*plaIntersect(startPoint, dir, p)).xy;
+    //uv.y += 0.5;
+    uv = (uv+0.5f)/0.62f;
+    uv.y = 1-uv.y+0.5;
+    //float4 clr = {uv, 0.0f, 1.0f};
+    //return clr;
+	float nx = 0.0f;
+	float ny = 0.0f;
+    float iTime = 1;
+	for (int i=1; i<ITERATIONS+1; i++)
+	{
+		float ii = pow((float)i, 2.0f);
+		float ifrac = (float)i/(float)ITERATIONS;
+		float t = ifrac * iTime * SPEED;
+		float d = (1.0f-ifrac) * DISPLACEMENT;
+        float3 t1 = {uv.x*ii-iTime*ifrac, uv.y*YSCALE*ii-t, 0.0f};
+        float3 t2 = {uv.x*ii+iTime*ifrac, uv.y*YSCALE*ii-t, iTime*ifrac/ii};
+		nx += noise(t1, texture) * d * 2.0f;
+		ny += noise(t2, texture) * d;
+	}
+    float2 uvnxy = {uv.x+nx, uv.y+ny};
+	float flame = shape(uvnxy);
+    float3 tone = FLAMETONE;
+	float3 col = pow(flame, TIGHTNESS) * tone;
+    
+    // tonemapping
+    col = col / (1.0f+col);
+    col = pow(col, 1.0f/2.2f);
+    col = clamp(col, 0.0f, 1.0f);
+    float alpha = 2*pow(length(startPoint - endPoint)/0.62f, 15);
+	
+    float4 color = {10*col, alpha};
+	return color;
+/*
+    float4 color = 0;
+    float3 dir = normalize(endPoint - startPoint)*0.1f;
+    float3 point = startPoint+dir;
+    int n = length(endPoint - point) / length(dir);
+    for (int i = 0; i < n; i++, point += dir) {
+        float intensity = (NoiseInPoint(point/10.0f)+1)/2;
+        float4 local_color = {intensity, 0, 0, 1};
+        color += local_color;
+    }
+    //color /= n/100.0f;
+    color *= pow(length(startPoint - endPoint)/0.62f, 10);
+    color.a = 1.0f;
+    return color;*/
 }
 
 kernel void intersectRay(global Ray *rayList, read_write image2d_t screen, global Mesh_idx * meshes, int meshesNum,
@@ -372,12 +449,19 @@ kernel void intersectRay(global Ray *rayList, read_write image2d_t screen, globa
 
     if (!findIntersection(myRay.startPoint, myRay.direction, false, 0, INFINITY, scene, texture,
                           &diffuseColor, &coords, &normal, &specular)) {
-        color.xyz = normalize(myRay.direction)/2 + 0.5f;
+        //color.xyz = {0, 0, 0}; //normalize(myRay.direction)/2 + 0.5f;
         myRay.type = ENDED;
         color *= myRay.weight;
         rayList[globalId] = myRay;
     } else {
         color = computeLightning(myRay.startPoint, myRay.direction, scene, diffuseColor, coords, normal, specular, texture);
+        float fade = 0;
+        if (myRay.type == MARCH) {
+            float4 fire_color = marchRay(myRay.startPoint, coords, texture);
+            color.xyz = mix(color.xyz, fire_color.xyz, fire_color.w);
+            fade = fire_color.w;
+
+        }
 
         if (specular > 0.0f) {
             float3 rayDirection = myRay.direction;
@@ -396,7 +480,7 @@ kernel void intersectRay(global Ray *rayList, read_write image2d_t screen, globa
                                       dot(transform2[2], hemisphereDistributedDirection)};
             newRayDirection = normalize(newRayDirection);
 
-            float roughness = 0.999;
+            float roughness = 1;
             bool refracted = IsRefracted(random1D(globalId, useed), normalize(rayDirection), normalize(normal), (1.0f - diffuseColor.a), N_IN, N_OUT);
             if (refracted)
             {
@@ -410,12 +494,15 @@ kernel void intersectRay(global Ray *rayList, read_write image2d_t screen, globa
                 newRayDirection = normalize(mix(newRayDirection, idealReflection, roughness));
                 newRayOrigin += normal * 0.000001f;
             }
-
+            myRay.type = (dot(newRayDirection, normal) < 0.0f) ? MARCH : INITIAL;
             myRay.direction = newRayDirection;
             myRay.startPoint = newRayOrigin;
 
             color *= myRay.weight*(1-specular);
-            myRay.weight *= (specular);
+            myRay.weight *= specular;
+            if (myRay.type == MARCH) {
+                myRay.weight*=(1-fade);
+            }
             rayList[globalId] = myRay;
         } else {
             myRay.type = ENDED;
