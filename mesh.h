@@ -1,9 +1,9 @@
 #ifndef GRAPHICS0_MESH_H
 #define GRAPHICS0_MESH_H
 
-#define CL_HPP_TARGET_OPENCL_VERSION 300
-#define CL_VERSION_3_0
-#include "CL/opencl.hpp"
+#define CL_HPP_TARGET_OPENCL_VERSION 220
+#define CL_VERSION_2_2
+#include "CL/cl2.hpp"
 #include <vector>
 #include "Image.h"
 #include <assimp/Importer.hpp>

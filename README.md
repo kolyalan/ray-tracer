@@ -1,8 +1,11 @@
 # Хрустальный шар с огнем
 
 Зависимости:
-
-    sudo apt-get install assimp
+    cmake
+    opencl-headers
+    intel-opencl-icd
+    ocl-icd-opencl-dev
+    sudo apt-get install libassimp-dev
 
 Нужна реализация OpenCL от вашего производителя видеокарты
 

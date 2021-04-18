@@ -4,9 +4,10 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <time.h>
-#define CL_HPP_TARGET_OPENCL_VERSION 300
-#define CL_VERSION_3_0
-#include "CL/opencl.hpp"
+
+#define CL_HPP_TARGET_OPENCL_VERSION 220
+#define CL_VERSION_2_2
+#include "CL/cl2.hpp"
 #include "Image.h"
 #include "mesh.h"
 
@@ -68,7 +69,7 @@ int initOpenCL() {
     std::cout << "Found " << allDevices.size() << " device(s)" << std::endl;
     defaultDevice = allDevices[0];
     std::cout << "Using device: " << defaultDevice.getInfo<CL_DEVICE_NAME>() << std::endl;
-    int workGroupMultiple = defaultDevice.getInfo<CL_DEVICE_PREFERRED_WORK_GROUP_SIZE_MULTIPLE>();
+    //int workGroupMultiple = defaultDevice.getInfo<CL_DEVICE_PREFERRED_WORK_GROUP_SIZE_MULTIPLE>();
     int maxWorkGroupSize = defaultDevice.getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
     std::cout << defaultDevice.getInfo<CL_DEVICE_OPENCL_C_VERSION>() << std::endl;
 
@@ -200,7 +201,7 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
         return 1;
     }
     int nPixels = ScreenWidth*ScreenHeight;
-    int nRaysPerPixel = 128;
+    int nRaysPerPixel = 4;
 
 	unsigned int log2val = (unsigned int)ceil(log((float)nPixels*nRaysPerPixel) / log(2.f));
 	size_t N_padded =  (size_t)pow(2, log2val);
