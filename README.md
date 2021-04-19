@@ -9,10 +9,20 @@
     ocl-icd-opencl-dev
     clinfo
     
+Нужна реализация OpenCL от вашего производителя видеокарты
+
     Для интегрированных видеокарт intel
     intel-opencl-icd
 
-Нужна реализация OpenCL от вашего производителя видеокарты
+    Для Nvidia 
+    nvidia-opencl-icd
+    
+    AMD
+    mesa-opencl-icd
+
+Команда clinfo покажет найденные платформы и устройства, для которых есть драйверы.
+
+Не уверен, что пакеты указаны верно, сам запускал на manjaro с Intel Graphics, пакеты брал отсюда. https://wiki.archlinux.org/index.php/GPGPU
 
 Сборка и запуск:
 
