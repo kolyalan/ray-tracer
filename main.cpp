@@ -11,7 +11,10 @@
 #include "Image.h"
 #include "mesh.h"
 
-const int ScreenWidth = 512, ScreenHeight = 512;
+extern char *optarg;
+extern int optind, opterr, optopt;
+
+int ScreenWidth = 512, ScreenHeight = 512;
 
 static cl::Platform defaultPlatform;
 static cl::Device defaultDevice;
@@ -193,7 +196,8 @@ int callCLSort(cl::Program &program, size_t N_padded, size_t LocalWorkSize,
     return 0;
 }
 
-int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPoint, cl_float3 viewVector, Model &model) {
+int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPoint, cl_float3 viewVector, Model &model,
+                    int depth, int nRaysPerPixel) {
     
     cl_int err_no;
     cl::Program program = buildCLProgram(&err_no);
@@ -201,7 +205,6 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
         return 1;
     }
     int nPixels = ScreenWidth*ScreenHeight;
-    int nRaysPerPixel = 4;
 
 	unsigned int log2val = (unsigned int)ceil(log((float)nPixels*nRaysPerPixel) / log(2.f));
 	size_t N_padded =  (size_t)pow(2, log2val);
@@ -276,7 +279,7 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
     intersectKernel.setArg(7, lightsBuffer);
     intersectKernel.setArg(8, lights.size());
 
-    for (int iteration = 5; iteration > 0; iteration--) {
+    for (int iteration = depth; iteration > 0; iteration--) {
         intersectKernel.setArg(0, rayPool);
         intersectKernel.setArg(9, (unsigned)rand());
         intersectKernel.setArg(10, iteration);
@@ -287,11 +290,12 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
                 return 1;
             }
         }
-        /*
+        #ifdef SORT_RAYS
         for (int i = 0; i < nRaysPerPixel; i++) {
             callCLSort(program, nPixels, 256, rayPool, tmpRayPool, i*nPixels);
         }
-        std::swap(rayPool, tmpRayPool);*/
+        std::swap(rayPool, tmpRayPool);
+        #endif
 
         /*Ray * rayList = new Ray[nPixels*nRaysPerPixel];
 
@@ -321,7 +325,7 @@ int callCLTraceRay(MyImage &screen, std::vector<Light> &lights, cl_float3 viewPo
     queue.enqueueNDRangeKernel(imageToIntKerel, cl::NullRange, cl::NDRange(ScreenWidth, ScreenHeight), cl::NullRange);
 
     //read result C from the device to array C
-    queue.enqueueReadImage(int8ScreenBuffer, CL_TRUE, {0,0,0}, {ScreenWidth, ScreenHeight, 1}, 0, 0, screen.getData());
+    queue.enqueueReadImage(int8ScreenBuffer, CL_TRUE, {0,0,0}, {(unsigned)ScreenWidth, (unsigned)ScreenHeight, 1}, 0, 0, screen.getData());
 
     return 0;
 }
@@ -330,9 +334,32 @@ cl_float3 canvasToViewport(cl_int2 coords, int screenWidth, int screenHeight, fl
     return {(float)coords.x/screenWidth/2, (float)coords.y/screenHeight/2, distance};
 }
 */
-int main() {
+int main(int argc, char *argv[]) {
     srand(time(NULL));
     initOpenCL();
+    
+    int raysPerPixel = 16;
+    int depth = 4;
+    int opt = 0;
+    if (argc > 1) {
+        while((opt = getopt(argc, argv, "w:s:d:")) != -1) {
+            switch(opt) {
+                case 'w':
+                    ScreenHeight = ScreenWidth = atoi(optarg);
+                    break;
+                case 's':
+                    raysPerPixel = atoi(optarg);
+                    break;
+                case 'd':
+                    depth = atoi(optarg);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+
     MyImage picture(ScreenWidth, ScreenHeight);
 
     Model model("../model/crystal_ball.obj");
@@ -345,11 +372,11 @@ int main() {
    //lights.push_back({DIRECTIONAL, 0.15f, {0,-2,1}});
     lights.push_back({POINT, 0.7, {2, -1, -1}});
 
-    if (callCLTraceRay(picture, lights, viewPoint, viewVector, model)) {
+    if (callCLTraceRay(picture, lights, viewPoint, viewVector, model, depth, raysPerPixel)) {
         std::cout << "Some error" << std::endl;
     } else {
         std::cout << "Rendered successfully" << std::endl;
-        picture.save("../327_lanbin_v0v0_tmp.png");
+        picture.save("../327_lanbin_v0v0.png");
     }
 
     return 0;

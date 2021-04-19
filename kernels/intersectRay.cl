@@ -387,7 +387,7 @@ float4 marchRay(float3 startPoint, float3 endPoint, image2d_array_t texture) {
     //return clr;
 	float nx = 0.0f;
 	float ny = 0.0f;
-    float iTime = 1;
+    float iTime = 2;
 	for (int i=1; i<ITERATIONS+1; i++)
 	{
 		float ii = pow((float)i, 2.0f);
@@ -408,9 +408,9 @@ float4 marchRay(float3 startPoint, float3 endPoint, image2d_array_t texture) {
     col = col / (1.0f+col);
     col = pow(col, 1.0f/2.2f);
     col = clamp(col, 0.0f, 1.0f);
-    float alpha = 2*pow(length(startPoint - endPoint)/0.62f, 15);
+    float alpha = 2*pow(length(startPoint - endPoint)/0.62f, 20);
 	
-    float4 color = {10*col, alpha};
+    float4 color = {8*col, alpha};
 	return color;
 /*
     float4 color = 0;
@@ -449,7 +449,8 @@ kernel void intersectRay(global Ray *rayList, read_write image2d_t screen, globa
 
     if (!findIntersection(myRay.startPoint, myRay.direction, false, 0, INFINITY, scene, texture,
                           &diffuseColor, &coords, &normal, &specular)) {
-        //color.xyz = {0, 0, 0}; //normalize(myRay.direction)/2 + 0.5f;
+        float3 gray = {0.005f, 0.005f, 0.005f}; //normalize(myRay.direction)/2 + 0.5f;
+        color.xyz = gray;
         myRay.type = ENDED;
         color *= myRay.weight;
         rayList[globalId] = myRay;
